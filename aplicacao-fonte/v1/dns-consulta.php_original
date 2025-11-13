@@ -1,0 +1,183 @@
+<?php
+
+
+
+
+
+$domain = $_POST['domain'] ?? '';
+
+
+$wwwCnameRecord = null;
+$wwwDomain = 'www.' . $domain;
+
+// Buscar e armazenar separadamente o CNAME do www
+$wwwCname = dns_get_record($wwwDomain, DNS_CNAME);
+if ($wwwCname) {
+    foreach ($wwwCname as $record) {
+        $wwwCnameRecord = [
+            'host' => $record['host'],
+            'type' => 'CNAME',
+            'info' => $record['target']
+        ];
+        $rawRecords[] = $record; // mantemos para o console
+    }
+}
+
+
+$types = [DNS_A, DNS_MX, DNS_NS, DNS_SOA, DNS_SRV];
+$subdomains = ['pop', 'imap', 'smtp', 'mail', 'webmail', 'autodiscover', 'www', '_dmarc', 'email-locaweb'];
+$allRecords = [];
+$rawRecords = [];
+
+foreach ($types as $type) {
+    $records = dns_get_record($domain, $type);
+    if ($records) {
+        foreach ($records as $record) {
+            $allRecords[] = [
+                'host' => $record['host'],
+                'type' => get_dns_type_name($type),
+                'info' => get_record_info($type, $record)
+            ];
+            $rawRecords[] = $record;
+        }
+    }
+}
+
+foreach ($subdomains as $subdomain) {
+    $subdomainDomain = $subdomain . '.' . $domain;
+
+    $records = dns_get_record($subdomainDomain, DNS_CNAME);
+    if ($records) {
+        foreach ($records as $record) {
+            $allRecords[] = [
+                'host' => $record['host'],
+                'type' => 'CNAME',
+                'info' => $record['target']
+            ];
+            $rawRecords[] = $record;
+        }
+    }
+
+    // Verifica se é CNAME antes de buscar TXT
+$cnameCheck = dns_get_record($subdomainDomain, DNS_CNAME);
+if (!$cnameCheck) {
+    $recordsTXT = dns_get_record($subdomainDomain, DNS_TXT);
+    if ($recordsTXT) {
+        foreach ($recordsTXT as $record) {
+            $allRecords[] = [
+                'host' => $record['host'],
+                'type' => 'TXT',
+                'info' => implode(", ", $record['entries'])
+            ];
+            $rawRecords[] = $record;
+        }
+    }
+    }
+}
+
+// SRV específico para _autodiscover._tcp
+$srvDomain = "_autodiscover._tcp." . $domain;
+$srvRecords = dns_get_record($srvDomain, DNS_SRV);
+if ($srvRecords) {
+    foreach ($srvRecords as $record) {
+        $allRecords[] = [
+            'host' => $record['host'],
+            'type' => 'SRV',
+            'info' => "{$record['pri']} {$record['weight']} {$record['port']} {$record['target']}"
+        ];
+        $rawRecords[] = $record;
+    }
+}
+
+// Ativa consulta TXT no domínio principal
+$recordsTXT = dns_get_record($domain, DNS_TXT);
+if ($recordsTXT) {
+    foreach ($recordsTXT as $record) {
+        $allRecords[] = [
+            'host' => $record['host'],
+            'type' => 'TXT',
+            'info' => implode(", ", $record['entries'])
+        ];
+        $rawRecords[] = $record;
+    }
+}
+
+
+// Exibir resultados
+if (!empty($allRecords)) {
+    echo "<h2>Registros DNS para: $domain</h2>";
+    echo "<table>";
+    echo "<tr><th>Host</th><th>Tipo</th><th>Informações</th></tr>";
+
+if ($wwwCnameRecord) {
+    echo "<tr>";
+    echo "<td>" . htmlspecialchars($wwwCnameRecord['host']) . "</td>";
+    echo "<td>" . htmlspecialchars($wwwCnameRecord['type']) . "</td>";
+    echo "<td>" . htmlspecialchars($wwwCnameRecord['info']) . "</td>";
+    echo "</tr>";
+}
+
+
+
+    $mxPermitidos = ['mx.a.locaweb.com.br', 'mx.b.locaweb.com.br', 'mx.core.locaweb.com.br', 'mx.jk.locaweb.com.br'];
+    $nsPermitidos = ['ns1.locaweb.com.br', 'ns2.locaweb.com.br', 'ns3.locaweb.com.br'];
+
+    foreach ($allRecords as $record) {
+	    // Pula o CNAME de www já exibido
+        if ($wwwCnameRecord && $record['type'] === 'CNAME' && $record['host'] === $wwwDomain) {
+       	 continue;
+        }
+	    $classe = '';
+        if ($record['type'] === 'MX' && in_array(strtolower($record['info']), $mxPermitidos)) {
+            $classe = 'highlight-green';
+        }
+        if ($record['type'] === 'NS' && in_array(strtolower($record['info']), $nsPermitidos)) {
+            $classe = 'highlight-green';
+        } 
+
+        echo "<tr>";
+        echo "<td>" . htmlspecialchars($record['host']) . "</td>";
+        echo "<td>" . htmlspecialchars($record['type']) . "</td>";
+        echo "<td class='$classe'>" . htmlspecialchars($record['info']) . "</td>";
+        echo "</tr>";
+    }
+
+    echo "</table>";
+    } else {
+    echo "<p>Nenhum registro encontrado para o domínio $domain.</p>";
+}
+
+// Enviar dados brutos ao console
+echo "<script>";
+echo "const rawData = " . json_encode($rawRecords, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . ";";
+echo "console.log('Dados brutos da consulta DNS:', rawData);";
+echo "</script>";
+
+// Funções auxiliares
+function get_dns_type_name($type) {
+    return match($type) {
+        DNS_A => 'A',
+        DNS_MX => 'MX',
+        DNS_NS => 'NS',
+        DNS_TXT => 'TXT',
+        DNS_CNAME => 'CNAME',
+        DNS_SOA => 'SOA',
+        DNS_SRV => 'SRV',
+        default => 'Desconhecido'
+    };
+}
+
+function get_record_info($type, $record) {
+    return match($type) {
+   # DNS_A => $record['ip'],
+	DNS_A => "{$record['ip']} (" . gethostbyaddr($record['ip']) . ")",
+        DNS_CNAME => $record['target'],
+        DNS_TXT => implode(", ", $record['entries']),
+        DNS_NS, DNS_MX => $record['target'],
+        DNS_SOA => "{$record['mname']} {$record['rname']} {$record['serial']}",
+        DNS_SRV => "{$record['pri']} {$record['weight']} {$record['port']} {$record['target']}",
+        default => ''
+    };
+}
+?>
+
